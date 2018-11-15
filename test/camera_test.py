@@ -17,6 +17,12 @@ from data.speak_data import frameCropResize
 # x1, y1, x2, y2, score, id, thresh_frame_counter, related_new_id
 def re_id(identity_box, boxes_c):
     boxes_len = len(boxes_c)
+    if boxes_len == 0:
+        if len(identity_box) > 0:
+            identity_box = identity_box[identity_box[:, -2] > 0]
+            identity_box[:, -2] = identity_box[:, -2] - 1
+        return identity_box
+
     temp = np.arange(boxes_len).reshape((-1, 1))
     temp_boxes = np.hstack((boxes_c, temp, temp, temp))
     if len(identity_box) == 0:
@@ -27,6 +33,7 @@ def re_id(identity_box, boxes_c):
     else:
         id_start = max(identity_box[:, -3]) + 1
 
+        identity_box = identity_box[identity_box[:, -2] > 0]
         # if can't re-id, then reduce effect counter. only thresh_frame_counter == thresh_frame to show pic
         identity_box[:, -2] = identity_box[:, -2] - 1
 
@@ -67,13 +74,13 @@ def re_id(identity_box, boxes_c):
             # new item id
             temp_boxes[i][-3] = id_start
             id_start += 1
-            np.vstack((identity_box, temp_boxes[i]))
+            identity_box = np.vstack((identity_box, temp_boxes[i]))
 
-        return identity_box[identity_box[:, -2] == thresh_frame]
+        return identity_box
 
 
 thresh_frame = 8
-thresh_iou = 0.65
+thresh_iou = 0.6
 
 
 def main():
@@ -95,7 +102,8 @@ def main():
     detectors[1] = RNet
     ONet = Detector(O_Net, 48, 1, model_path[2])
     detectors[2] = ONet
-    videopath = "./videoplayback.mp4"  # 466 1700
+    # videopath = "./videoplayback.mp4"  # 466 1700
+    videopath = r"D:\dataset\300VW_Dataset_2015_12_14\041\vid.avi"  # 466 1700
     mtcnn_detector = MtcnnDetector(detectors=detectors, min_face_size=min_face_size,
                                    stride=stride, threshold=thresh, slide_window=slide_window)
 
@@ -121,10 +129,10 @@ def main():
         t1 = cv2.getTickCount()
         ret, frame = video_capture.read()
         frame_num += 1
-        if frame_num < 466: #529:
-            continue
-        if frame_num > 1700:
-            break
+        # if frame_num < 466: #511 1459
+        #     continue
+        # if frame_num > 1700:
+        #     break
 
         print(frame_num)
         if ret:
@@ -132,48 +140,53 @@ def main():
             boxes_c, landmarks = mtcnn_detector.detect(image)
 
             identity_box = re_id(identity_box, boxes_c)
+            if len(identity_box) > 0:
+                to_predict = identity_box[identity_box[:, -2] == thresh_frame]
+                to_predict_ids = to_predict[:, -3]
 
-            # get prediction result
-            for i in range(len(identity_box)):
-                annotations = []
-                item = identity_box[i]
-                unify_id = int(item[-3])
-                new_id = int(item[-1])
+                if len(landmarks) > 0:
+                    # get prediction result
+                    for i in range(len(to_predict)):
+                        annotations = []
+                        item = to_predict[i]
+                        unify_id = int(item[-3])
+                        new_id = int(item[-1])
 
-                if image_data_landmark.__contains__(unify_id):
-                    img_array = image_data_landmark[unify_id]
-                else:
-                    img_array = list()
-                    image_data_landmark[unify_id] = img_array
+                        if image_data_landmark.__contains__(unify_id):
+                            img_array = image_data_landmark[unify_id]
+                        else:
+                            img_array = list()
+                            image_data_landmark[unify_id] = img_array
 
-                landmarks_3_points = landmarks[new_id]
+                        landmarks_3_points = landmarks[new_id]
 
-                for j in range(2, len(landmarks_3_points) // 2):
-                    annotations.append((int(landmarks_3_points[2 * j]), int(landmarks_3_points[2 * j + 1])))
+                        for j in range(2, len(landmarks_3_points) // 2):
+                            annotations.append((int(landmarks_3_points[2 * j]), int(landmarks_3_points[2 * j + 1])))
 
-                img_arr = frameCropResize(annotations, frame, (32, 32))
-                r = (img_arr[:, :, 1] / 255.).astype(np.float32)
-                img_array.append(r)
-                # image_data_landmark[unify_id] = np.dstack(img_array, r)
+                        img_arr = frameCropResize(annotations, frame, (32, 32))
+                        r = (img_arr[:, :, 1] / 255.).astype(np.float32)
+                        img_array.append(r)
+                        # image_data_landmark[unify_id] = np.dstack(img_array, r)
 
-                if len(img_array) == 16:
-                    data = np.dstack(img_array)
-                    prediction = model_3dc.predict(np.expand_dims(data, axis=0))
-                    if np.argmax(prediction[0], axis=0) == 1:
-                        speak_status_data[unify_id] = 16
-                    image_data_landmark[unify_id] = list()
+                        if len(img_array) == 16:
+                            data = np.dstack(img_array)
+                            prediction = model_3dc.predict(np.expand_dims(data, axis=0))
+                            if np.argmax(prediction[0], axis=0) == 1:
+                                speak_status_data[unify_id] = 1
+                            img_array.pop(0)
 
             t2 = cv2.getTickCount()
             t = (t2 - t1) / cv2.getTickFrequency()
             fps = 1.0 / t
 
-            to_show = identity_box[identity_box[:, -2] == thresh_frame]
+            #to_show = identity_box[identity_box[:, -2] == thresh_frame]
 
             for i in range(boxes_c.shape[0]):
-                o_data = to_show[to_show[:, -1] == i]
+                unify_id = -1
+                o_data = identity_box[identity_box[:, -1] == i]
                 if o_data is not None and len(o_data) > 0:
                     unify_id = o_data[0, -3]
-                    if speak_status_data.get(unify_id) is not None and speak_status_data[unify_id] > 0:
+                    if unify_id in to_predict_ids and speak_status_data.get(unify_id) is not None and speak_status_data[unify_id] > 0:
                         speak_status_data[unify_id] = speak_status_data[unify_id] - 1
                         c = (255, 0, 0)
                     else:
@@ -186,21 +199,20 @@ def main():
                 # if score > thresh:
                 cv2.rectangle(frame, (corpbbox[0], corpbbox[1]),
                               (corpbbox[2], corpbbox[3]), c, 1)
-                cv2.putText(frame, '{:.3f}'.format(score), (corpbbox[0], corpbbox[1] - 2), cv2.FONT_HERSHEY_SIMPLEX,
+                cv2.putText(frame, 'id {:.3f}'.format(unify_id), (corpbbox[0], corpbbox[1] - 2), cv2.FONT_HERSHEY_SIMPLEX,
                             0.5,
                             (0, 0, 255), 2)
-                cv2.putText(frame, '{:.4f}'.format(t) + " " + '{:.3f}'.format(frame_num), (10, 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                            (255, 0, 255), 2)
                 for j in range(len(landmarks[i]) // 2):
                     cv2.circle(frame, (int(landmarks[i][2 * j]), int(int(landmarks[i][2 * j + 1]))), 2, (0, 0, 255))
-                cv2.imshow("", frame)
+            cv2.putText(frame, '{:.4f}'.format(t) + " " + '{:.3f}'.format(frame_num), (10, 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                        (255, 0, 255), 2)
+            cv2.imshow("", frame)
             # for i in range(landmarks.shape[0]):
             #     for j in range(len(landmarks[i])//2):
             #         cv2.circle(frame, (int(landmarks[i][2*j]),int(int(landmarks[i][2*j+1]))), 2, (0,0,255))
             # time end
 
-            cv2.imshow("", frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
         else:
