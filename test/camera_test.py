@@ -11,8 +11,9 @@ import numpy as np
 
 from keras.models import load_model
 
-from data.speak_data import frameCropResize
-
+from data.speak_data import frameCropResize, getAnnotations
+import os
+import glob
 
 # x1, y1, x2, y2, score, id, thresh_frame_counter, related_new_id
 def re_id(identity_box, boxes_c):
@@ -36,7 +37,8 @@ def re_id(identity_box, boxes_c):
         identity_box = identity_box[identity_box[:, -2] > 0]
         # if can't re-id, then reduce effect counter. only thresh_frame_counter == thresh_frame to show pic
         identity_box[:, -2] = identity_box[:, -2] - 1
-
+        if len(identity_box) == 0:
+            return []
         id_has_relation = []
 
         for pos in range(len(temp_boxes)):
@@ -83,7 +85,10 @@ thresh_frame = 8
 thresh_iou = 0.6
 
 
-def main():
+def main(saved_model, videopath, to_save=False):
+    # speaker detect
+    model_3dc = load_model(saved_model)
+
     test_mode = "onet"
     thresh = [0.9, 0.6, 0.7]
     min_face_size = 24
@@ -102,12 +107,25 @@ def main():
     detectors[1] = RNet
     ONet = Detector(O_Net, 48, 1, model_path[2])
     detectors[2] = ONet
-    # videopath = "./videoplayback.mp4"  # 466 1700
-    videopath = r"D:\dataset\300VW_Dataset_2015_12_14\041\vid.avi"  # 466 1700
     mtcnn_detector = MtcnnDetector(detectors=detectors, min_face_size=min_face_size,
                                    stride=stride, threshold=thresh, slide_window=slide_window)
 
     video_capture = cv2.VideoCapture(videopath)
+    h = int(video_capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    w = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+    length_frame = int(video_capture.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = video_capture.get(cv2.CAP_PROP_FPS)
+    codec = video_capture.get(cv2.CAP_PROP_FOURCC)
+    fourcc = cv2.VideoWriter_fourcc(*"XVID")
+    source_file_name = videopath.split(os.sep)[-1]
+    model_file_name = saved_model.split(os.sep)[-1]
+    source_file_name_split = source_file_name.split('.')
+    target_path = videopath.replace(source_file_name, source_file_name_split[0] + '-' + model_file_name + '.avi') # + source_file_name_split[1])
+    print('target_path {}', target_path)
+    if to_save:
+        videoWriter = cv2.VideoWriter(target_path, fourcc, fps, (w, h))
+
     # video_capture.set(3, 340)
     # video_capture.set(4, 480)
     corpbbox = None
@@ -116,22 +134,14 @@ def main():
     image_data_landmark = dict()
     speak_status_data = dict()
 
-    # model = '3d_in_c'
-    seq_length = 16
-    saved_model = '../data/3dc/3d_in_c-images.047-0.018.hdf5'
-    data_type = 'images'
-    image_shape = (32, 32, seq_length)
-
-    model_3dc = load_model(saved_model)
-
     while True:
         # fps = video_capture.get(cv2.CAP_PROP_FPS)
         t1 = cv2.getTickCount()
         ret, frame = video_capture.read()
         frame_num += 1
-        # if frame_num < 466: #511 1459
+        # if frame_num < 466: #511 1459 466
         #     continue
-        # if frame_num > 1700:
+        # if frame_num > 1700: # 470
         #     break
 
         print(frame_num)
@@ -164,6 +174,20 @@ def main():
                             annotations.append((int(landmarks_3_points[2 * j]), int(landmarks_3_points[2 * j + 1])))
 
                         img_arr = frameCropResize(annotations, frame, (32, 32))
+
+                        # TODO just for test
+                        # filePathList = videopath.split("\\")
+                        # fileName = filePathList[-1]
+                        # basePathSource = videopath.replace("\\" + fileName, "")
+                        # annotations = getAnnotations(basePathSource, frame_num)
+                        # img_arr = frameCropResize(annotations, frame, (32, 32))
+
+
+                        # targetPath = os.path.join(r'D:\datasetConvert\test', str(int(unify_id)))
+                        # if not os.path.exists(targetPath):
+                        #     os.makedirs(targetPath)
+                        # cv2.imwrite(os.path.join(targetPath, "%06d.jpg" % frame_num), img_arr)
+
                         r = (img_arr[:, :, 1] / 255.).astype(np.float32)
                         img_array.append(r)
                         # image_data_landmark[unify_id] = np.dstack(img_array, r)
@@ -183,31 +207,33 @@ def main():
 
             for i in range(boxes_c.shape[0]):
                 unify_id = -1
-                o_data = identity_box[identity_box[:, -1] == i]
-                if o_data is not None and len(o_data) > 0:
+                if len(identity_box) > 0 and len(identity_box[identity_box[:, -1] == i]) > 0:
+                    o_data = identity_box[identity_box[:, -1] == i]
                     unify_id = o_data[0, -3]
                     if unify_id in to_predict_ids and speak_status_data.get(unify_id) is not None and speak_status_data[unify_id] > 0:
                         speak_status_data[unify_id] = speak_status_data[unify_id] - 1
-                        c = (255, 0, 0)
-                    else:
                         c = (0, 0, 255)
+                    else:
+                        c = (0, 255, 0)
                 else:
-                    c = (0, 0, 255)
+                    c = (0, 255, 0)
                 bbox = boxes_c[i, :4]
                 score = boxes_c[i, 4]
                 corpbbox = [int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])]
                 # if score > thresh:
                 cv2.rectangle(frame, (corpbbox[0], corpbbox[1]),
-                              (corpbbox[2], corpbbox[3]), c, 1)
-                cv2.putText(frame, 'id {:.3f}'.format(unify_id), (corpbbox[0], corpbbox[1] - 2), cv2.FONT_HERSHEY_SIMPLEX,
+                              (corpbbox[2], corpbbox[3]), c, 2)
+                cv2.putText(frame, ("id %04d" % int(unify_id)), (corpbbox[0], corpbbox[1] - 5), cv2.FONT_HERSHEY_SIMPLEX,
                             0.5,
-                            (0, 0, 255), 2)
+                            (0, 255, 0), 1)
                 for j in range(len(landmarks[i]) // 2):
-                    cv2.circle(frame, (int(landmarks[i][2 * j]), int(int(landmarks[i][2 * j + 1]))), 2, (0, 0, 255))
-            cv2.putText(frame, '{:.4f}'.format(t) + " " + '{:.3f}'.format(frame_num), (10, 20),
+                    cv2.circle(frame, (int(landmarks[i][2 * j]), int(int(landmarks[i][2 * j + 1]))), 1, (0, 255, 0))
+            cv2.putText(frame, '{}'.format(length_frame) + ":" + '{}'.format(frame_num), (10, 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                        (255, 0, 255), 2)
+                        (0, 255, 255), 1)
             cv2.imshow("", frame)
+            if to_save:
+                videoWriter.write(frame)
             # for i in range(landmarks.shape[0]):
             #     for j in range(len(landmarks[i])//2):
             #         cv2.circle(frame, (int(landmarks[i][2*j]),int(int(landmarks[i][2*j+1]))), 2, (0,0,255))
@@ -218,9 +244,21 @@ def main():
         else:
             print('device not find')
             break
+    if to_save:
+        videoWriter.release()
     video_capture.release()
     cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
-    main()
+    #saved_model_list = ['../data/3dc/v6-102-3d_in_c-images.001-0.433.hdf5']
+    #saved_model_list = ['../data/3dc/v5-local-3d_in_c-images.002-0.094.hdf5']
+    saved_model_list = ['..' + os.sep + 'data' + os.sep + '3dc' + os.sep + 'v6-102-3d_in_c-images.001-0.433.hdf5']
+    #saved_model_list = sorted(glob.glob(os.path.join('..' + os.sep, 'data', '3dc', '*hdf5')))
+    # ['../data/3dc/v4-3d_in_c-images.001-0.071.hdf5', '../data/3dc/v3_3d_in_c-images.003-0.030.hdf5',
+    #                 '../data/3dc/v2_3d_in_c-images.002-0.040.hdf5', '../data/3dc/v1_3d_in_c-images.047-0.018.hdf5']
+    #videopath = "./videoplayback.mp4"  # 466 1700
+    videopath = 'D:' + os.sep + 'dataset' + os.sep + '300VW_Dataset_2015_12_14' + os.sep + '003' + os.sep + 'vid.avi'  # 466 1700
+    # saved_model = '../data/3dc/v2_3d_in_c-images.002-0.040.hdf5'
+    for saved_model in saved_model_list:
+        main(saved_model, videopath, True)
