@@ -303,7 +303,7 @@ class MtcnnDetector(object):
         boxes_c = self.calibrate_box(boxes, reg[keep])
         return boxes, boxes_c, None
 
-    def detect_onet(self, im, dets):
+    def detect_onet(self, im, dets, no_thresh=False):
         """Get face candidates using onet
 
         Parameters:
@@ -334,7 +334,10 @@ class MtcnnDetector(object):
         cls_scores, reg, landmark = self.onet_detector.predict(cropped_ims)
         # prob belongs to face
         cls_scores = cls_scores[:, 1]
-        keep_inds = np.where(cls_scores > self.thresh[2])[0]
+        if not no_thresh:
+           keep_inds = np.where(cls_scores > self.thresh[2])[0]
+        else:
+            keep_inds = np.where(cls_scores > 0)[0]
         if len(keep_inds) > 0:
             # pickout filtered box
             boxes = dets[keep_inds]
@@ -397,6 +400,19 @@ class MtcnnDetector(object):
             # print(
             #    "time cost " + '{:.3f}'.format(t1 + t2 + t3) + '  pnet {:.3f}  rnet {:.3f}  onet {:.3f}'.format(t1, t2,
             #                                                                                                  t3))
+
+        return boxes_c, landmark
+
+    # detect by old bbox
+    def detect_bbox(self, img, boxes_c):
+        """Detect face over image
+        """
+        # onet
+        t3 = 0
+        if self.onet_detector:
+            boxes, boxes_c, landmark = self.detect_onet(img, boxes_c, True)
+            if boxes_c is None:
+                return np.array([]), np.array([])
 
         return boxes_c, landmark
 
